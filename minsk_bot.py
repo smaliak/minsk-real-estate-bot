@@ -3,10 +3,14 @@ import telebot
 from telebot import types
 import requests
 import logging
+import json
 from flask import Flask, request
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
+# Настройка расширенного логирования
+logging.basicConfig(
+    level=logging.DEBUG,  # Изменили уровень на DEBUG
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Настройки
@@ -22,121 +26,88 @@ user_histories = {}
 app = Flask(__name__)
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-def get_ai_response(user_id, message_text):
-    """Получение ответа от Abacus AI"""
-    try:
-        if user_id not in user_histories:
-            user_histories[user_id] = []
-        
-        # Формируем запрос к API
-        data = {
-            "deployment_id": ABACUS_DEPLOYMENT_ID,
-            "prediction_input": {
-                "question": message_text,
-                "chat_history": user_histories[user_id]
-            }
-        }
-        
-        # Отправляем запрос
-        response = requests.post(
-            ABACUS_API_URL,
-            json=data,
-            headers={
-                "Authorization": f"Bearer {ABACUS_TOKEN}",
-                "Content-Type": "application/json"
-            }
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            answer = result["prediction"]["answer"]
-            
-            # Сохраняем историю
-            user_histories[user_id].append({"role": "user", "content": message_text})
-            user_histories[user_id].append({"role": "assistant", "content": answer})
-            
-            # Ограничиваем историю
-            if len(user_histories[user_id]) > 20:
-                user_histories[user_id] = user_histories[user_id][-20:]
-                
-            return answer
-        else:
-            logger.error(f"API Error: {response.status_code} - {response.text}")
-            return None
-
-    except Exception as e:
-        logger.error(f"Error getting AI response: {str(e)}")
-        return None
-
-def create_keyboard():
-    keyboard = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    buttons = [
-        "💰 Оценить квартиру",
-        "🏠 Купить квартиру",
-        "🔑 Продать квартиру",
-        "🗺 Районы Минска",
-        "📋 Документы",
-        "❓ Помощь"
-    ]
-    keyboard.add(*[types.KeyboardButton(text) for text in buttons])
-    return keyboard
-
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    welcome_text = """👋 Здравствуйте! Я AI-консультант по недвижимости в Минске.
+    logger.debug(f"Received /start command from user {message.from_user.id}")
+    try:
+        # Сначала отправляем простое сообщение
+        bot.reply_to(message, "Привет! Подождите секунду...")
+        logger.debug("Sent initial response")
+        
+        # Затем отправляем полное приветствие с меню
+        welcome_text = """👋 Здравствуйте! Я AI-консультант по недвижимости в Минске.
 
 Чем могу помочь?
 • Оценка стоимости квартиры
 • Помощь с покупкой/продажей
 • Информация о районах
-• Консультация по документам
+• Консультация по документам"""
 
-Выберите тему в меню или задайте вопрос ⬇️"""
-    
-    try:
+        keyboard = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        buttons = [
+            "💰 Оценить квартиру",
+            "🏠 Купить квартиру",
+            "🔑 Продать квартиру",
+            "🗺 Районы Минска",
+            "📋 Документы",
+            "❓ Помощь"
+        ]
+        keyboard.add(*[types.KeyboardButton(text) for text in buttons])
+        
         bot.send_message(
             message.chat.id,
             welcome_text,
-            reply_markup=create_keyboard(),
-            parse_mode='HTML'
+            reply_markup=keyboard
         )
+        logger.debug("Sent welcome message with keyboard")
+        
     except Exception as e:
-        logger.error(f"Ошибка при отправке приветствия: {str(e)}")
+        logger.error(f"Error in send_welcome: {str(e)}", exc_info=True)
+        bot.reply_to(message, "Произошла ошибка при запуске. Попробуйте позже.")
 
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
+    logger.debug(f"Received message: {message.text} from user {message.from_user.id}")
     try:
-        # Показываем "печатает..."
-        bot.send_chat_action(message.chat.id, 'typing')
+        # Сразу отправляем подтверждение получения
+        bot.reply_to(message, "Получил ваше сообщение, обрабатываю...")
+        logger.debug("Sent confirmation message")
         
-        # Получаем ответ от AI
-        ai_response = get_ai_response(message.from_user.id, message.text)
-        
-        if ai_response:
-            bot.reply_to(message, ai_response)
-        else:
-            bot.reply_to(message, "Извините, произошла ошибка. Попробуйте переформулировать вопрос.")
-
     except Exception as e:
-        logger.error(f"Ошибка при обработке сообщения: {str(e)}")
-        bot.reply_to(message, "Извините, произошла ошибка. Попробуйте еще раз.")
+        logger.error(f"Error in handle_text: {str(e)}", exc_info=True)
+        bot.reply_to(message, f"Ошибка: {str(e)}")
 
 # Обработка вебхука
 @app.route("/" + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return ''
-    else:
-        return 'Error: wrong content-type'
+    try:
+        logger.debug("Webhook received request")
+        logger.debug(f"Headers: {request.headers}")
+        
+        if request.headers.get('content-type') == 'application/json':
+            json_string = request.get_data().decode('utf-8')
+            logger.debug(f"Received webhook data: {json_string}")
+            
+            update = telebot.types.Update.de_json(json_string)
+            logger.debug("Created Update object")
+            
+            bot.process_new_updates([update])
+            logger.debug("Processed update")
+            
+            return ''
+        else:
+            logger.warning(f"Received request with wrong content-type: {request.headers.get('content-type')}")
+            return 'Error: wrong content-type'
+    
+    except Exception as e:
+        logger.error(f"Error in webhook handler: {str(e)}", exc_info=True)
+        return 'Error in webhook handler'
 
 @app.route("/")
 def index():
     return "Bot is running"
 
 if __name__ == "__main__":
-    # Запуск Flask приложения
+    logger.info("Starting bot application")
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
