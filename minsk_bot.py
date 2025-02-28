@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # Настройки
 TELEGRAM_TOKEN = "7763479683:AAEiEsx4465ou4hQa6WjGTtHO0lIbDeYNr0"
 ABACUS_DEPLOYMENT_ID = "2f66f5efc"
-ABACUS_API_URL = "https://api.abacus.ai/deployment/predict"  # Обновленный URL
+ABACUS_API_URL = "https://app.abacus.ai/api/v0/deployment/predict"  # Обновленный URL
 ABACUS_TOKEN = "004a4ac2c18144cda4198ce9a964d26d"
 
 # История чатов пользователей
@@ -36,7 +36,8 @@ def get_ai_response(user_id, message_text):
         
         headers = {
             "Authorization": f"Bearer {ABACUS_TOKEN}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Accept": "application/json"
         }
         
         data = {
@@ -47,12 +48,39 @@ def get_ai_response(user_id, message_text):
             }
         }
         
-        logger.debug(f"Отправляем запрос к API: {json.dumps(data)}")
-        response = requests.post(ABACUS_API_URL, headers=headers, json=data)
-        logger.debug(f"Получен ответ от API. Статус: {response.status_code}")
-        logger.debug(f"Текст ответа: {response.text[:200]}")  # Логируем начало ответа
+        logger.debug(f"Отправляем запрос к API: URL={ABACUS_API_URL}")
+        logger.debug(f"Заголовки: {headers}")
+        logger.debug(f"Данные: {json.dumps(data)}")
         
-        if response.status_code == 200:
+        # Пробуем разные варианты URL если основной не работает
+        urls_to_try = [
+            "https://app.abacus.ai/api/v0/deployment/predict",
+            "https://api.abacus.ai/api/v0/deployment/predict",
+            "https://api.abacus.ai/deployment/predict"
+        ]
+        
+        response = None
+        working_url = None
+        
+        for url in urls_to_try:
+            try:
+                logger.debug(f"Пробуем URL: {url}")
+                response = requests.post(url, headers=headers, json=data, timeout=10)
+                if response.status_code == 200:
+                    working_url = url
+                    break
+                else:
+                    logger.warning(f"URL {url} вернул статус {response.status_code}")
+            except Exception as e:
+                logger.warning(f"Ошибка при использовании URL {url}: {str(e)}")
+                continue
+        
+        if working_url:
+            logger.info(f"Найден работающий URL: {working_url}")
+            global ABACUS_API_URL
+            ABACUS_API_URL = working_url
+        
+        if response and response.status_code == 200:
             result = response.json()
             answer = result["prediction"]["answer"]
             
@@ -62,9 +90,12 @@ def get_ai_response(user_id, message_text):
             if len(user_histories[user_id]) > 20:
                 user_histories[user_id] = user_histories[user_id][-20:]
             
+            logger.debug("Успешно получен ответ от AI")
             return answer
         else:
-            logger.error(f"Ошибка API: {response.status_code} - {response.text[:200]}")
+            status = response.status_code if response else "Нет ответа"
+            text = response.text[:200] if response else "Нет текста ответа"
+            logger.error(f"Ошибка API: {status} - {text}")
             return None
 
     except Exception as e:
@@ -115,10 +146,6 @@ def handle_text(message):
     try:
         logger.debug(f"Получено сообщение: {message.text}")
         
-        # Сначала отправляем сообщение о получении
-        sent_msg = bot.reply_to(message, "Секунду, формирую ответ...")
-        logger.debug("Отправлено промежуточное сообщение")
-        
         # Отправляем "печатает..."
         bot.send_chat_action(message.chat.id, 'typing')
         
@@ -126,26 +153,16 @@ def handle_text(message):
         ai_response = get_ai_response(message.from_user.id, message.text)
         
         if ai_response:
-            # Удаляем промежуточное сообщение
-            try:
-                bot.delete_message(message.chat.id, sent_msg.message_id)
-            except:
-                logger.warning("Не удалось удалить промежуточное сообщение")
-            
-            # Отправляем ответ AI
             bot.reply_to(message, ai_response)
             logger.debug("Отправлен ответ AI")
         else:
-            bot.edit_message_text(
-                "Извините, произошла ошибка. Попробуйте переформулировать вопрос.",
-                message.chat.id,
-                sent_msg.message_id
-            )
+            error_message = "Извините, произошла техническая ошибка. Мы работаем над её устранением. Пожалуйста, попробуйте позже."
+            bot.reply_to(message, error_message)
             logger.warning("Отправлено сообщение об ошибке (ответ AI не получен)")
 
     except Exception as e:
         logger.error(f"Ошибка в обработчике сообщений: {str(e)}", exc_info=True)
-        bot.reply_to(message, "Произошла ошибка. Попробуйте еще раз.")
+        bot.reply_to(message, "Произошла ошибка. Попробуйте еще раз позже.")
 
 @app.route("/" + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
