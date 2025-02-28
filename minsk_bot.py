@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Настройки
 TELEGRAM_TOKEN = "7763479683:AAEiEsx4465ou4hQa6WjGTtHO0lIbDeYNr0"
 ABACUS_DEPLOYMENT_ID = "2f66f5efc"
-ABACUS_API_URL = "https://pa002.abacus.ai/deployment/predict"  # Обновленный URL
+ABACUS_API_URL = "https://pa002.abacus.ai/deployment/predict"
 ABACUS_TOKEN = "004a4ac2c18144cda4198ce9a964d26d"
 
 # История чатов пользователей
@@ -38,32 +38,40 @@ def get_ai_response(user_id, message_text):
             "Content-Type": "application/json"
         }
         
+        # Обновленный формат данных
         data = {
-            "deployment_id": ABACUS_DEPLOYMENT_ID,
-            "prediction_input": {
+            "deploymentId": ABACUS_DEPLOYMENT_ID,  # Изменено
+            "predictionInput": {  # Изменено
                 "question": message_text,
-                "chat_history": user_histories[user_id]
+                "chatHistory": user_histories[user_id]  # Изменено
             }
         }
         
         logger.debug(f"Отправляем запрос к API: {ABACUS_API_URL}")
+        logger.debug(f"Данные запроса: {data}")
+        
         response = requests.post(ABACUS_API_URL, headers=headers, json=data, timeout=30)
         logger.debug(f"Получен ответ от API. Статус: {response.status_code}")
+        logger.debug(f"Текст ответа: {response.text[:200]}")
         
         if response.status_code == 200:
             result = response.json()
-            answer = result["prediction"]["answer"]
+            answer = result.get("prediction", {}).get("answer")
             
-            user_histories[user_id].append({"role": "user", "content": message_text})
-            user_histories[user_id].append({"role": "assistant", "content": answer})
-            
-            if len(user_histories[user_id]) > 20:
-                user_histories[user_id] = user_histories[user_id][-20:]
-            
-            logger.debug("Успешно получен ответ от AI")
-            return answer
+            if answer:
+                user_histories[user_id].append({"role": "user", "content": message_text})
+                user_histories[user_id].append({"role": "assistant", "content": answer})
+                
+                if len(user_histories[user_id]) > 20:
+                    user_histories[user_id] = user_histories[user_id][-20:]
+                
+                logger.debug("Успешно получен ответ от AI")
+                return answer
+            else:
+                logger.error("Ответ получен, но отсутствует поле answer")
+                return None
         else:
-            logger.error(f"Ошибка API: {response.status_code} - {response.text[:200]}")
+            logger.error(f"Ошибка API: {response.status_code} - {response.text}")
             return None
 
     except Exception as e:
