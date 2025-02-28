@@ -3,6 +3,7 @@ import telebot
 from telebot import types
 import requests
 import logging
+import json
 from flask import Flask, request
 
 # Настройка логирования
@@ -14,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 # Настройки
 TELEGRAM_TOKEN = "7763479683:AAEiEsx4465ou4hQa6WjGTtHO0lIbDeYNr0"
-ABACUS_DEPLOYMENT_ID = "2f66f5efc"  # Новый деплоймент
-ABACUS_API_URL = "https://api.abacus.ai/api/v0/deployment/predict"
-ABACUS_TOKEN = "004a4ac2c18144cda4198ce9a964d26d"  # Новый токен
+ABACUS_DEPLOYMENT_ID = "2f66f5efc"
+ABACUS_API_URL = "https://api.abacus.ai/deployment/predict"  # Обновленный URL
+ABACUS_TOKEN = "004a4ac2c18144cda4198ce9a964d26d"
 
 # История чатов пользователей
 user_histories = {}
@@ -30,11 +31,14 @@ def get_ai_response(user_id, message_text):
     try:
         logger.debug(f"Получаем ответ AI для пользователя {user_id}")
         
-        # Инициализация истории чата для нового пользователя
         if user_id not in user_histories:
             user_histories[user_id] = []
         
-        # Подготовка данных для запроса
+        headers = {
+            "Authorization": f"Bearer {ABACUS_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
         data = {
             "deployment_id": ABACUS_DEPLOYMENT_ID,
             "prediction_input": {
@@ -43,38 +47,28 @@ def get_ai_response(user_id, message_text):
             }
         }
         
-        logger.debug("Отправляем запрос к Abacus AI")
-        response = requests.post(
-            ABACUS_API_URL,
-            json=data,
-            headers={
-                "Authorization": f"Bearer {ABACUS_TOKEN}",
-                "Content-Type": "application/json"
-            }
-        )
-        
-        logger.debug(f"Статус ответа API: {response.status_code}")
+        logger.debug(f"Отправляем запрос к API: {json.dumps(data)}")
+        response = requests.post(ABACUS_API_URL, headers=headers, json=data)
+        logger.debug(f"Получен ответ от API. Статус: {response.status_code}")
+        logger.debug(f"Текст ответа: {response.text[:200]}")  # Логируем начало ответа
         
         if response.status_code == 200:
             result = response.json()
             answer = result["prediction"]["answer"]
             
-            # Обновляем историю чата
             user_histories[user_id].append({"role": "user", "content": message_text})
             user_histories[user_id].append({"role": "assistant", "content": answer})
             
-            # Ограничиваем историю последними 20 сообщениями
             if len(user_histories[user_id]) > 20:
                 user_histories[user_id] = user_histories[user_id][-20:]
             
-            logger.debug("Ответ AI получен успешно")
             return answer
         else:
-            logger.error(f"Ошибка API: {response.status_code} - {response.text}")
+            logger.error(f"Ошибка API: {response.status_code} - {response.text[:200]}")
             return None
 
     except Exception as e:
-        logger.error(f"Ошибка при получении ответа AI: {str(e)}")
+        logger.error(f"Ошибка при получении ответа AI: {str(e)}", exc_info=True)
         return None
 
 def create_keyboard():
@@ -113,13 +107,17 @@ def send_welcome(message):
         )
         logger.debug("Отправлено приветственное сообщение")
     except Exception as e:
-        logger.error(f"Ошибка в обработчике start: {str(e)}")
+        logger.error(f"Ошибка в обработчике start: {str(e)}", exc_info=True)
 
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     """Обработчик текстовых сообщений"""
     try:
         logger.debug(f"Получено сообщение: {message.text}")
+        
+        # Сначала отправляем сообщение о получении
+        sent_msg = bot.reply_to(message, "Секунду, формирую ответ...")
+        logger.debug("Отправлено промежуточное сообщение")
         
         # Отправляем "печатает..."
         bot.send_chat_action(message.chat.id, 'typing')
@@ -128,15 +126,25 @@ def handle_text(message):
         ai_response = get_ai_response(message.from_user.id, message.text)
         
         if ai_response:
+            # Удаляем промежуточное сообщение
+            try:
+                bot.delete_message(message.chat.id, sent_msg.message_id)
+            except:
+                logger.warning("Не удалось удалить промежуточное сообщение")
+            
+            # Отправляем ответ AI
             bot.reply_to(message, ai_response)
             logger.debug("Отправлен ответ AI")
         else:
-            error_message = "Извините, произошла ошибка. Попробуйте переформулировать вопрос."
-            bot.reply_to(message, error_message)
+            bot.edit_message_text(
+                "Извините, произошла ошибка. Попробуйте переформулировать вопрос.",
+                message.chat.id,
+                sent_msg.message_id
+            )
             logger.warning("Отправлено сообщение об ошибке (ответ AI не получен)")
 
     except Exception as e:
-        logger.error(f"Ошибка в обработчике сообщений: {str(e)}")
+        logger.error(f"Ошибка в обработчике сообщений: {str(e)}", exc_info=True)
         bot.reply_to(message, "Произошла ошибка. Попробуйте еще раз.")
 
 @app.route("/" + TELEGRAM_TOKEN, methods=['POST'])
@@ -161,7 +169,7 @@ def webhook():
             return 'Error: wrong content-type'
     
     except Exception as e:
-        logger.error(f"Ошибка в обработчике вебхука: {str(e)}")
+        logger.error(f"Ошибка в обработчике вебхука: {str(e)}", exc_info=True)
         return 'Error in webhook handler'
 
 @app.route("/")
