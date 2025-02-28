@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Настройки
 TELEGRAM_TOKEN = "7763479683:AAEiEsx4465ou4hQa6WjGTtHO0lIbDeYNr0"
 ABACUS_DEPLOYMENT_ID = "2f66f5efc"
-ABACUS_API_URL = "https://app.abacus.ai/api/v0/deployment/predict"
+ABACUS_API_URL = "https://pa002.abacus.ai/deployment/predict"  # Обновленный URL
 ABACUS_TOKEN = "004a4ac2c18144cda4198ce9a964d26d"
 
 # История чатов пользователей
@@ -28,6 +28,8 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
 def get_ai_response(user_id, message_text):
     """Получение ответа от Abacus AI"""
     try:
+        logger.debug(f"Получаем ответ AI для пользователя {user_id}")
+        
         if user_id not in user_histories:
             user_histories[user_id] = []
         
@@ -44,7 +46,9 @@ def get_ai_response(user_id, message_text):
             }
         }
         
-        response = requests.post(ABACUS_API_URL, headers=headers, json=data)
+        logger.debug(f"Отправляем запрос к API: {ABACUS_API_URL}")
+        response = requests.post(ABACUS_API_URL, headers=headers, json=data, timeout=30)
+        logger.debug(f"Получен ответ от API. Статус: {response.status_code}")
         
         if response.status_code == 200:
             result = response.json()
@@ -56,9 +60,10 @@ def get_ai_response(user_id, message_text):
             if len(user_histories[user_id]) > 20:
                 user_histories[user_id] = user_histories[user_id][-20:]
             
+            logger.debug("Успешно получен ответ от AI")
             return answer
         else:
-            logger.error(f"Ошибка API: {response.status_code}")
+            logger.error(f"Ошибка API: {response.status_code} - {response.text[:200]}")
             return None
 
     except Exception as e:
@@ -98,6 +103,7 @@ def send_welcome(message):
             welcome_text,
             reply_markup=create_keyboard()
         )
+        logger.debug("Отправлено приветственное сообщение")
     except Exception as e:
         logger.error(f"Ошибка в обработчике start: {str(e)}")
 
@@ -105,6 +111,11 @@ def send_welcome(message):
 def handle_text(message):
     """Обработчик текстовых сообщений"""
     try:
+        logger.debug(f"Получено сообщение: {message.text}")
+        
+        # Отправляем промежуточное сообщение
+        sent_msg = bot.reply_to(message, "Секунду, формирую ответ...")
+        
         # Отправляем "печатает..."
         bot.send_chat_action(message.chat.id, 'typing')
         
@@ -112,13 +123,27 @@ def handle_text(message):
         ai_response = get_ai_response(message.from_user.id, message.text)
         
         if ai_response:
+            # Удаляем промежуточное сообщение
+            try:
+                bot.delete_message(message.chat.id, sent_msg.message_id)
+            except:
+                logger.warning("Не удалось удалить промежуточное сообщение")
+            
+            # Отправляем ответ
             bot.reply_to(message, ai_response)
+            logger.debug("Отправлен ответ AI")
         else:
-            bot.reply_to(message, "Извините, произошла ошибка. Попробуйте позже.")
+            # Обновляем промежуточное сообщение
+            bot.edit_message_text(
+                "Извините, произошла ошибка. Попробуйте переформулировать вопрос или спросить позже.",
+                message.chat.id,
+                sent_msg.message_id
+            )
+            logger.warning("Отправлено сообщение об ошибке (ответ AI не получен)")
 
     except Exception as e:
         logger.error(f"Ошибка в обработчике сообщений: {str(e)}")
-        bot.reply_to(message, "Произошла ошибка. Попробуйте еще раз.")
+        bot.reply_to(message, "Произошла ошибка. Попробуйте еще раз позже.")
 
 @app.route("/" + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
@@ -135,11 +160,7 @@ def webhook():
 def index():
     return "Bot is running"
 
-# Явное указание порта
-port = int(os.environ.get("PORT", 8080))
-print(f"Starting server on port {port}")
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=port)
-if __name__ == "__main__":
+    logger.info("Запуск приложения бота")
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
