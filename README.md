@@ -1,0 +1,1 @@
+# minsk-real-estate-bot
